@@ -1,7 +1,7 @@
 import os
 import requests
 from PIL import Image, ImageDraw
-from google import genai
+import google.generativeai as genai
 
 # ---------------- CONFIG ----------------
 TOPICS = [
@@ -14,9 +14,8 @@ OUTPUT_DIR = "output"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 # ---------------- GEMINI SETUP ----------------
-client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
-
-GEMINI_MODEL = "models/gemini-1.0-pro"  # <-- THIS IS THE FIX
+genai.configure(api_key=os.environ["GEMINI_API_KEY"])
+model = genai.GenerativeModel("gemini-pro")  # ✅ Correct model name
 
 def generate_image_prompt(topic):
     prompt = (
@@ -25,11 +24,7 @@ def generate_image_prompt(topic):
         "Clean white background, soft natural lighting, "
         "professional food photography, no text in image."
     )
-
-    response = client.models.generate_content(
-        model=GEMINI_MODEL,
-        contents=prompt
-    )
+    response = model.generate_content(prompt)
     return response.text.strip()
 
 def generate_nutrition_text(topic):
@@ -38,11 +33,7 @@ def generate_nutrition_text(topic):
         f"Topic: {topic}. "
         "Format: Title, then three bullet points."
     )
-
-    response = client.models.generate_content(
-        model=GEMINI_MODEL,
-        contents=text_prompt
-    )
+    response = model.generate_content(text_prompt)
     return response.text.strip()
 
 # ---------------- IMAGE GENERATION ----------------
@@ -58,7 +49,7 @@ def generate_image(prompt, path):
     )
 
     if r.headers.get("content-type") != "image/png":
-        raise RuntimeError("Hugging Face did not return an image.")
+        raise RuntimeError(f"Hugging Face did not return an image. Response: {r.text}")
 
     with open(path, "wb") as f:
         f.write(r.content)
@@ -81,16 +72,20 @@ def run():
     for idx, topic in enumerate(TOPICS):
         print(f"Processing: {topic}")
 
-        prompt = generate_image_prompt(topic)
-        text = generate_nutrition_text(topic)
+        try:
+            prompt = generate_image_prompt(topic)
+            text = generate_nutrition_text(topic)
 
-        raw = f"{OUTPUT_DIR}/raw_{idx}.png"
-        final = f"{OUTPUT_DIR}/post_{idx}.png"
+            raw = f"{OUTPUT_DIR}/raw_{idx}.png"
+            final = f"{OUTPUT_DIR}/post_{idx}.png"
 
-        generate_image(prompt, raw)
-        format_and_overlay(raw, text, final)
+            generate_image(prompt, raw)
+            format_and_overlay(raw, text, final)
 
-        print("Created:", final)
+            print("Created:", final)
+
+        except Exception as e:
+            print(f"Error processing '{topic}': {e}")
 
 if __name__ == "__main__":
     run()
