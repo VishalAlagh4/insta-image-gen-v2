@@ -32,7 +32,10 @@ def generate_image_prompt(topic: str) -> str:
         "professional food photography, sharp focus, high resolution, no text or logos in the image."
     )
     response = model.generate_content(prompt)
-    return (response.text or "").strip()
+    text = (response.text or "").strip()
+    if not text:
+        raise RuntimeError("Gemini returned empty prompt text.")
+    return text
 
 def generate_nutrition_text(topic: str) -> str:
     text_prompt = (
@@ -41,44 +44,107 @@ def generate_nutrition_text(topic: str) -> str:
         "Format: Title, then three bullet points. Keep it concise and positive."
     )
     response = model.generate_content(text_prompt)
-    return (response.text or "").strip()
+    text = (response.text or "").strip()
+    if not text:
+        raise RuntimeError("Gemini returned empty caption text.")
+    return text
 
-# ---------------- HUGGING FACE TASK ENDPOINT ----------------
-HF_URL = "https://api-inference.huggingface.co/models/stabilityai/stable-diffusion-xl-base-1.0"
+# ---------------- HUGGING FACE ROUTER (FREE) ----------------
+HF_URL = "https://router.huggingface.co"
 HF_HEADERS = {
     "Authorization": f"Bearer {os.environ.get('HF_TOKEN', '')}",
-    "Accept": "image/png"
+    "Accept": "image/png",
+    "Content-Type": "application/json",
 }
 
-def generate_image(prompt: str, path: str, retries: int = 2, delay: int = 3):
+# Primary + fallback models (free, commonly available)
+HF_PRIMARY_MODEL = "stabilityai/sdxl-turbo"
+HF_FALLBACK_MODEL = "stabilityai/stable-diffusion-2-1"
+
+def hf_generate_image(prompt: str, model_name: str, timeout: int = 120) -> bytes:
+    """
+    Calls Hugging Face Router with explicit model selection.
+    Returns raw PNG bytes if successful.
+    Raises with detailed message otherwise.
+    """
+    if not HF_HEADERS["Authorization"]:
+        raise RuntimeError("Missing HF_TOKEN environment variable.")
+
+    payload = {
+        "inputs": prompt,
+        "model": model_name
+    }
+
+    r = requests.post(HF_URL, headers=HF_HEADERS, json=payload, timeout=timeout)
+
+    ctype = r.headers.get("content-type", "")
+    if r.status_code == 200 and "image/png" in ctype:
+        return r.content
+
+    # Provide clear diagnostics for common router errors
+    raise RuntimeError(
+        f"Hugging Face did not return an image. "
+        f"Status: {r.status_code}. Content-Type: {ctype}. Response: {r.text}"
+    )
+
+def generate_image_with_retry(prompt: str, retries: int = 2, delay: int = 3) -> bytes:
+    """
+    Try primary model first; if it fails, fallback to a secondary model.
+    Retries transient failures and handles 404/410 gracefully.
+    """
+    last_err = None
+
+    # Try primary model
     for attempt in range(1, retries + 2):
         try:
-            r = requests.post(HF_URL, headers=HF_HEADERS, json={"inputs": prompt}, timeout=120)
-            if r.status_code == 200 and "image" in r.headers.get("content-type", ""):
-                with open(path, "wb") as f:
-                    f.write(r.content)
-                return
-            else:
-                raise RuntimeError(f"Status: {r.status_code}. Response: {r.text}")
+            return hf_generate_image(prompt, HF_PRIMARY_MODEL)
         except Exception as e:
-            print(f"[Attempt {attempt}] Hugging Face generation failed: {e}")
+            last_err = e
+            print(f"[Primary {HF_PRIMARY_MODEL} attempt {attempt}] failed: {e}")
             if attempt <= retries:
                 time.sleep(delay)
-    raise RuntimeError("Hugging Face generation failed after retries.")
+
+    # Fallback model
+    for attempt in range(1, retries + 2):
+        try:
+            return hf_generate_image(prompt, HF_FALLBACK_MODEL)
+        except Exception as e:
+            last_err = e
+            print(f"[Fallback {HF_FALLBACK_MODEL} attempt {attempt}] failed: {e}")
+            if attempt <= retries:
+                time.sleep(delay)
+
+    raise RuntimeError(f"Hugging Face generation failed after retries: {last_err}")
 
 # ---------------- IMAGE POST-PROCESSING ----------------
-def format_and_overlay(image_path: str, text: str, out_path: str):
-    img = Image.open(image_path).convert("RGB").resize(CANVAS_SIZE)
+def format_and_overlay(image_bytes: bytes, text: str) -> Image.Image:
+    """
+    - Loads PNG bytes into PIL
+    - Resizes to Instagram square
+    - Overlays wrapped caption text near the bottom
+    """
+    img = Image.open(io.BytesIO(image_bytes)).convert("RGB").resize(CANVAS_SIZE)
+
     draw = ImageDraw.Draw(img)
     font = ImageFont.load_default()
+
     wrapped = textwrap.fill(text, width=40)
-    draw.multiline_text((40, CAPTION_AREA_Y), wrapped, fill="black", spacing=12, font=font)
-    img.save(out_path)
+
+    draw.multiline_text(
+        (40, CAPTION_AREA_Y),
+        wrapped,
+        fill="black",
+        spacing=12,
+        font=font,
+    )
+
+    return img
 
 # ---------------- PIPELINE ----------------
 def run():
     for idx, topic in enumerate(TOPICS):
         print(f"\n=== Processing: {topic} ===")
+
         try:
             prompt = generate_image_prompt(topic)
             print("Gemini prompt:\n", prompt)
@@ -86,13 +152,19 @@ def run():
             caption = generate_nutrition_text(topic)
             print("Gemini caption:\n", caption)
 
-            raw = os.path.join(OUTPUT_DIR, f"raw_{idx}.png")
-            final = os.path.join(OUTPUT_DIR, f"post_{idx}.png")
+            # Generate image via HF Router
+            raw_png_bytes = generate_image_with_retry(prompt)
 
-            generate_image(prompt, raw)
-            format_and_overlay(raw, caption, final)
+            raw_path = os.path.join(OUTPUT_DIR, f"raw_{idx}.png")
+            with open(raw_path, "wb") as f:
+                f.write(raw_png_bytes)
 
-            print("Created:", final)
+            final_img = format_and_overlay(raw_png_bytes, caption)
+            final_path = os.path.join(OUTPUT_DIR, f"post_{idx}.png")
+            final_img.save(final_path, format="PNG")
+
+            print("Created:", final_path)
+
         except Exception as e:
             print(f"Error processing '{topic}': {e}")
 
