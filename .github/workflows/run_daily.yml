@@ -27,7 +27,6 @@ jobs:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: python main.py
 
-
       - name: Upload generated images
         uses: actions/upload-artifact@v4
         with:
