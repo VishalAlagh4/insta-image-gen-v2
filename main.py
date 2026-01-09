@@ -16,16 +16,18 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 # ---------------- GEMINI SETUP ----------------
 client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
 
+GEMINI_MODEL = "models/gemini-1.0-pro"  # <-- THIS IS THE FIX
+
 def generate_image_prompt(topic):
     prompt = (
         "Create a minimal flat lay Instagram food photography prompt. "
         f"Topic: {topic}. "
-        "Clean white or pastel background, soft natural lighting, "
+        "Clean white background, soft natural lighting, "
         "professional food photography, no text in image."
     )
 
     response = client.models.generate_content(
-        model="models/gemini-1.5-flash",
+        model=GEMINI_MODEL,
         contents=prompt
     )
     return response.text.strip()
@@ -38,7 +40,7 @@ def generate_nutrition_text(topic):
     )
 
     response = client.models.generate_content(
-        model="models/gemini-1.5-flash",
+        model=GEMINI_MODEL,
         contents=text_prompt
     )
     return response.text.strip()
