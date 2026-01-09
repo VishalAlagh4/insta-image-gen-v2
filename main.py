@@ -38,7 +38,7 @@ def generate_nutrition_text(topic):
     return response.text.strip()
 
 # ---------------- IMAGE GENERATION ----------------
-HF_URL = "HF_URL = "https://router.huggingface.co"
+HF_URL = "https://router.huggingface.co"
 HEADERS = {"Authorization": f"Bearer {os.environ['HF_TOKEN']}"}
 
 def generate_image(prompt, path):
